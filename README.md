@@ -30,6 +30,22 @@ npm run build
 npm start
 ```
 
+## Health Check
+
+Check if the server is running:
+```bash
+curl http://localhost:3000/health
+```
+
+Response:
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-10-08T12:24:00.000Z",
+  "service": "freshdesk-contact-cleanup"
+}
+```
+
 ## Trigger Deletion
 
 Make a `POST` request to the cleanup endpoint:

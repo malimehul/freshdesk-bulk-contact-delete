@@ -12,6 +12,7 @@ app.use(routes);
 
 app.listen(port, () => {
   console.log(`🚀 Freshdesk Cleanup Server running on http://localhost:${port}`);
+  console.log(`🩺 Health check: GET http://localhost:${port}/health`);
   console.log(`📡 Ready to receive POST http://localhost:${port}/delete-all-contacts`);
 });
 
