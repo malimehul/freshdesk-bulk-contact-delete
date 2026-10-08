@@ -1,28 +1,16 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
 import { Queue, Worker, Job, ConnectionOptions } from 'bullmq';
 import { FreshdeskService } from './freshdesk';
 
 export const getRedisConnectionOptions = (): ConnectionOptions => {
-  let redisUrl = process.env.REDIS_URL?.trim();
+  const redisUrl = process.env.REDIS_URL;
 
   if (redisUrl) {
-    // If the input was copied as a full redis-cli command (e.g. redis-cli --tls -u redis://...)
-    const urlMatch = redisUrl.match(/(rediss?:\/\/[^\s]+)/);
-    if (urlMatch) {
-      redisUrl = urlMatch[1];
-    }
-
-    const isUpstash = redisUrl.includes('upstash.io');
-    const isTls = redisUrl.startsWith('rediss://') || isUpstash;
-
-    // Upstash requires rediss:// protocol for TLS
-    const normalizedUrl = isUpstash && redisUrl.startsWith('redis://')
+    const normalizedUrl = redisUrl.startsWith('redis://') && redisUrl.includes('upstash.io')
       ? redisUrl.replace(/^redis:\/\//, 'rediss://')
       : redisUrl;
 
     const url = new URL(normalizedUrl);
+    const isTls = normalizedUrl.startsWith('rediss://');
 
     return {
       host: url.hostname,
@@ -70,6 +58,9 @@ export const initCleanupWorker = () => {
     {
       connection: redisConnection,
       concurrency: 1, // Process one cleanup batch at a time to respect Freshdesk rate limits
+      lockDuration: 300000, // 5 minutes lock duration to allow long deletion loops & rate limit cooldowns
+      stalledInterval: 60000, // Check for stalled jobs every 60s
+      maxStalledCount: 3,
     }
   );
 

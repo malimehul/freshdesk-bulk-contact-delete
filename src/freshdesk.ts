@@ -1,9 +1,11 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, AxiosResponse } from 'axios';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class FreshdeskService {
   private client: AxiosInstance;
+  private rateLimitResetUntil = 0;
+  private delayBetweenRequestsMs = Number(process.env.DELETE_DELAY_MS || 250);
 
   constructor() {
     const baseURL = process.env.FRESHDESK_BASE_URL || 'https://iblfinance-help.freshdesk.com';
@@ -25,6 +27,32 @@ export class FreshdeskService {
   }
 
   /**
+   * Proactively pauses if we are currently in a rate limit cooldown window
+   */
+  private async checkRateLimitCooldown(): Promise<void> {
+    const now = Date.now();
+    if (now < this.rateLimitResetUntil) {
+      const waitMs = this.rateLimitResetUntil - now;
+      console.log(`⏳ Pausing for ${Math.ceil(waitMs / 1000)}s due to active rate-limit window...`);
+      await sleep(waitMs);
+      console.log(`▶️ Cooldown finished. Resuming requests.`);
+    }
+  }
+
+  /**
+   * Inspects response headers to anticipate rate limit exhaustion
+   */
+  private handleRateLimitHeaders(response?: AxiosResponse): void {
+    if (!response || !response.headers) return;
+
+    const remaining = response.headers['x-ratelimit-remaining'];
+    if (remaining !== undefined && Number(remaining) <= 2) {
+      console.warn(`⚠️ Freshdesk rate limit remaining is low (${remaining}). Adding brief pause.`);
+      this.rateLimitResetUntil = Date.now() + 3000;
+    }
+  }
+
+  /**
    * Fetches all contact IDs using pagination (per_page = 100)
    */
   async getAllContactIds(): Promise<number[]> {
@@ -35,11 +63,15 @@ export class FreshdeskService {
     console.log('🔍 Fetching all contacts from Freshdesk...');
 
     while (true) {
+      await this.checkRateLimitCooldown();
+
       try {
         console.log(`📄 Fetching page ${page}...`);
         const response = await this.client.get<{ id: number }[]>('/api/v2/contacts', {
           params: { per_page: perPage, page },
         });
+
+        this.handleRateLimitHeaders(response);
 
         const contacts = response.data;
         if (!contacts || contacts.length === 0) {
@@ -51,18 +83,18 @@ export class FreshdeskService {
         console.log(`   Fetched ${ids.length} contacts (Total so far: ${contactIds.length})`);
 
         if (contacts.length < perPage) {
-          // No more pages left
           break;
         }
 
         page++;
-        // Small delay between page fetches to avoid rate limits
-        await sleep(100);
+        await sleep(this.delayBetweenRequestsMs);
       } catch (error: any) {
         if (error.response?.status === 429) {
-          const retryAfter = Number(error.response.headers['retry-after'] || 5);
-          console.warn(`⏳ Rate limited while fetching contacts. Waiting ${retryAfter}s...`);
-          await sleep(retryAfter * 1000);
+          const retryAfter = Number(error.response.headers['retry-after'] || 30);
+          console.warn(`⏳ Rate limit reached on page ${page}. Waiting ${retryAfter}s before retrying...`);
+          this.rateLimitResetUntil = Date.now() + (retryAfter + 1) * 1000;
+          await sleep((retryAfter + 1) * 1000);
+          console.log(`▶️ Rate limit wait over. Retrying page ${page}...`);
           continue;
         }
         console.error(`❌ Error fetching contacts on page ${page}:`, error.response?.data || error.message);
@@ -78,19 +110,25 @@ export class FreshdeskService {
    * Hard deletes a single contact by ID with automatic rate-limit retry
    */
   async hardDeleteContact(contactId: number): Promise<boolean> {
-    const maxRetries = 3;
+    const maxRetries = 5;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      await this.checkRateLimitCooldown();
+
       try {
-        await this.client.delete(`/api/v2/contacts/${contactId}/hard_delete`, {
+        const response = await this.client.delete(`/api/v2/contacts/${contactId}/hard_delete`, {
           params: { force: true },
         });
+
+        this.handleRateLimitHeaders(response);
         return true;
       } catch (error: any) {
         if (error.response?.status === 429) {
-          const retryAfter = Number(error.response.headers['retry-after'] || 5);
+          const retryAfter = Number(error.response.headers['retry-after'] || 30);
           console.warn(`⏳ Rate limit reached on contact ${contactId}. Waiting ${retryAfter}s (attempt ${attempt}/${maxRetries})...`);
-          await sleep(retryAfter * 1000);
+          this.rateLimitResetUntil = Date.now() + (retryAfter + 1) * 1000;
+          await sleep((retryAfter + 1) * 1000);
+          console.log(`▶️ Rate limit wait over. Retrying contact ${contactId}...`);
           continue;
         }
 
@@ -124,7 +162,7 @@ export class FreshdeskService {
       return { totalFound: 0, deleted: 0, failed: 0 };
     }
 
-    console.log(`🚀 Starting hard deletion of ${totalFound} contacts...`);
+    console.log(`🚀 Starting hard deletion of ${totalFound} contacts (Pacing delay: ${this.delayBetweenRequestsMs}ms)...`);
 
     for (let i = 0; i < totalFound; i++) {
       const id = contactIds[i];
@@ -149,8 +187,8 @@ export class FreshdeskService {
         });
       }
 
-      // Small delay between deletes to respect Freshdesk API limits
-      await sleep(50);
+      // Safe pacing delay between deletes
+      await sleep(this.delayBetweenRequestsMs);
     }
 
     console.log(`\n🎉 Deletion complete: Total=${totalFound}, Deleted=${deleted}, Failed=${failed}`);
