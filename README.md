@@ -13,7 +13,7 @@ A simple Node.js + Express.js + TypeScript utility to permanently delete all con
    Update `.env` with your Freshdesk API key and account domain:
    ```env
    PORT=3000
-   FRESHDESK_BASE_URL=https://iblfinance-help.freshdesk.com
+   FRESHDESK_BASE_URL=your_freshdesk_bussines_url
    FRESHDESK_API_KEY=your_freshdesk_api_key_here
    ```
 
