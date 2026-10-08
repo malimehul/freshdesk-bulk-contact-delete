@@ -1,6 +1,12 @@
-# Freshdesk Contact Cleanup Utility
+# Freshdesk Contact Cleanup Utility (BullMQ)
 
-A simple Node.js + Express.js + TypeScript utility to permanently delete all contacts from a Freshdesk test account.
+A simple Node.js + Express.js + TypeScript utility using **BullMQ** to permanently hard delete all Freshdesk contacts in the background.
+
+## Prerequisites
+- **Node.js** (v18+)
+- **Redis Server** running locally or remotely (default: `localhost:6379`)
+
+---
 
 ## Setup
 
@@ -10,12 +16,19 @@ A simple Node.js + Express.js + TypeScript utility to permanently delete all con
    ```
 
 2. **Configure Environment Variables**:
-   Update `.env` with your Freshdesk API key and account domain:
+   Update `.env` with your Freshdesk and Redis settings:
    ```env
    PORT=3000
-   FRESHDESK_BASE_URL=your_freshdesk_bussines_url
+   FRESHDESK_BASE_URL=https://iblfinance-help.freshdesk.com
    FRESHDESK_API_KEY=your_freshdesk_api_key_here
+
+   # Redis Configuration
+   REDIS_HOST=localhost
+   REDIS_PORT=6379
+   REDIS_PASSWORD=
    ```
+
+---
 
 ## Running the Application
 
@@ -30,14 +43,15 @@ npm run build
 npm start
 ```
 
-## Health Check
+---
 
-Check if the server is running:
+## API Endpoints
+
+### 1. Health Check
 ```bash
 curl http://localhost:3000/health
 ```
-
-Response:
+**Response:**
 ```json
 {
   "status": "ok",
@@ -46,27 +60,46 @@ Response:
 }
 ```
 
-## Trigger Deletion
-
-Make a `POST` request to the cleanup endpoint:
-
+### 2. Trigger Deletion (Background BullMQ Job)
 ```bash
 curl -X POST http://localhost:3000/delete-all-contacts
 ```
-
-### Response Example:
+**Response:**
 ```json
 {
   "success": true,
-  "totalFound": 11000,
-  "deleted": 10998,
-  "failed": 2
+  "message": "Contact cleanup job started in background",
+  "jobId": "1",
+  "statusUrl": "/job-status/1"
 }
 ```
 
-## Features
-- **Pagination**: Automatically iterates through all contact pages (`per_page=100`) until all contacts are fetched.
-- **Hard Delete**: Calls `DELETE /api/v2/contacts/{id}/hard_delete?force=true`.
-- **Rate Limit Resilience**: Handles `429 Too Many Requests` responses using `Retry-After` headers and applies small delays between requests.
-- **Live Progress Logging**: Real-time console logs showing `[X/Total]` status for each contact.
-- **Fault-Tolerant**: Continues processing remaining contacts even if individual deletions fail.
+### 3. Check Job Status
+```bash
+curl http://localhost:3000/job-status/1
+```
+**Response:**
+```json
+{
+  "success": true,
+  "jobId": "1",
+  "state": "completed",
+  "progress": 100,
+  "result": {
+    "totalFound": 11000,
+    "deleted": 10998,
+    "failed": 2
+  },
+  "failedReason": null
+}
+```
+
+---
+
+## How It Works
+1. `POST /delete-all-contacts` enqueues a job in BullMQ and immediately returns `202 Accepted` with the `jobId`.
+2. The BullMQ background worker processes the job:
+   - Fetches contacts in pages of 100 (`GET /api/v2/contacts`).
+   - Hard-deletes each contact (`DELETE /api/v2/contacts/:id/hard_delete?force=true`).
+   - Updates BullMQ job progress in real-time.
+   - Respects rate limits with `429` retry handling.

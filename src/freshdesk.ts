@@ -111,7 +111,9 @@ export class FreshdeskService {
   /**
    * Deletes all given contacts sequentially with progress logging
    */
-  async deleteAllContacts(): Promise<{ totalFound: number; deleted: number; failed: number }> {
+  async deleteAllContacts(
+    onProgress?: (progress: { total: number; current: number; deleted: number; failed: number; percentage: number }) => Promise<void> | void
+  ): Promise<{ totalFound: number; deleted: number; failed: number }> {
     const contactIds = await this.getAllContactIds();
     const totalFound = contactIds.length;
     let deleted = 0;
@@ -134,6 +136,17 @@ export class FreshdeskService {
       } else {
         failed++;
         console.log(`[${i + 1}/${totalFound}] ❌ Failed to delete contact ID: ${id}`);
+      }
+
+      if (onProgress && ((i + 1) % 10 === 0 || i + 1 === totalFound)) {
+        const percentage = Math.round(((i + 1) / totalFound) * 100);
+        await onProgress({
+          total: totalFound,
+          current: i + 1,
+          deleted,
+          failed,
+          percentage,
+        });
       }
 
       // Small delay between deletes to respect Freshdesk API limits
