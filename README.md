@@ -1,10 +1,19 @@
-# Freshdesk Contact Cleanup Utility (BullMQ)
+# Freshdesk Contact Cleanup Utility (BullMQ Batched)
 
-A simple Node.js + Express.js + TypeScript utility using **BullMQ** to permanently hard delete all Freshdesk contacts in the background.
+A robust Node.js + Express.js + TypeScript utility using **BullMQ** to permanently hard delete all Freshdesk contacts in background batches.
 
-## Prerequisites
-- **Node.js** (v18+)
-- **Redis Server** running locally or remotely (default: `localhost:6379`)
+---
+
+## Architecture: Why Batched Processing?
+
+Instead of 1 monolithic job taking 45 minutes and risking 5-minute timeout / stalled worker locks:
+1. `POST /delete-all-contacts` enqueues a `START_CLEANUP` job.
+2. The worker fetches all contact IDs and automatically creates **small batch jobs (25 contacts per job)**.
+3. Each batch job finishes in **~5–8 seconds**.
+4. If a rate limit (HTTP 429) or deployment restart happens:
+   - Only that specific batch waits for cooldown and resumes.
+   - All completed batches remain saved in Redis and are never repeated.
+   - Zero lock expiration / stall timeouts.
 
 ---
 
@@ -15,17 +24,12 @@ A simple Node.js + Express.js + TypeScript utility using **BullMQ** to permanent
    npm install
    ```
 
-2. **Configure Environment Variables**:
-   Update `.env` with your Freshdesk and Redis settings:
+2. **Configure Environment Variables** in `.env`:
    ```env
    PORT=3000
    FRESHDESK_BASE_URL=https://iblfinance-help.freshdesk.com
    FRESHDESK_API_KEY=your_freshdesk_api_key_here
-
-   # Redis Configuration
-   REDIS_HOST=localhost
-   REDIS_PORT=6379
-   REDIS_PASSWORD=
+   REDIS_URL=rediss://default:your_password@your-endpoint.upstash.io:6379
    ```
 
 ---
@@ -51,16 +55,8 @@ npm start
 ```bash
 curl http://localhost:3000/health
 ```
-**Response:**
-```json
-{
-  "status": "ok",
-  "timestamp": "2026-10-08T12:24:00.000Z",
-  "service": "freshdesk-contact-cleanup"
-}
-```
 
-### 2. Trigger Deletion (Background BullMQ Job)
+### 2. Trigger Cleanup
 ```bash
 curl -X POST http://localhost:3000/delete-all-contacts
 ```
@@ -68,38 +64,32 @@ curl -X POST http://localhost:3000/delete-all-contacts
 ```json
 {
   "success": true,
-  "message": "Contact cleanup job started in background",
+  "message": "Contact cleanup job started in background (batched processing)",
   "jobId": "1",
-  "statusUrl": "/job-status/1"
+  "queueStatusUrl": "/queue-status"
 }
 ```
 
-### 3. Check Job Status
+### 3. Check Queue Status (Monitor Progress)
 ```bash
-curl http://localhost:3000/job-status/1
+curl http://localhost:3000/queue-status
 ```
 **Response:**
 ```json
 {
   "success": true,
-  "jobId": "1",
-  "state": "completed",
-  "progress": 100,
-  "result": {
-    "totalFound": 11000,
-    "deleted": 10998,
-    "failed": 2
-  },
-  "failedReason": null
+  "queue": "freshdesk-contact-cleanup",
+  "counts": {
+    "waiting": 120,
+    "active": 1,
+    "completed": 45,
+    "failed": 0,
+    "delayed": 0
+  }
 }
 ```
 
----
-
-## How It Works
-1. `POST /delete-all-contacts` enqueues a job in BullMQ and immediately returns `202 Accepted` with the `jobId`.
-2. The BullMQ background worker processes the job:
-   - Fetches contacts in pages of 100 (`GET /api/v2/contacts`).
-   - Hard-deletes each contact (`DELETE /api/v2/contacts/:id/hard_delete?force=true`).
-   - Updates BullMQ job progress in real-time.
-   - Respects rate limits with `429` retry handling.
+### 4. Clean / Reset Queue (If Needed)
+```bash
+curl -X POST http://localhost:3000/clean-queue
+```
