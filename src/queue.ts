@@ -40,7 +40,7 @@ export const contactCleanupQueue = new Queue(QUEUE_NAME, {
 });
 
 const freshdeskService = new FreshdeskService();
-const BATCH_SIZE = 25; // 25 contacts per job = ~6-8s per job, preventing timeout issues
+const BATCH_SIZE = 100; // 25 contacts per job = ~6-8s per job, preventing timeout issues
 
 interface DeleteBatchJobData {
   startIndex: number;
